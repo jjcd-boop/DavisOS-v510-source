@@ -1,0 +1,47 @@
+static inline long call(unsigned long n,unsigned long a=0,unsigned long b=0,unsigned long c=0,unsigned long d=0){register unsigned long rax asm("rax")=n;register unsigned long rdi asm("rdi")=a;register unsigned long rsi asm("rsi")=b;register unsigned long rdx asm("rdx")=c;register unsigned long r10 asm("r10")=d;asm volatile("int $0x80":"+a"(rax):"D"(rdi),"S"(rsi),"d"(rdx),"r"(r10):"memory","cc");return (long)rax;}
+struct DriverDmaInfo{unsigned long user,physical,bytes;};
+struct DriverResourceInfo{unsigned long id,base,length;unsigned int type,rights,reserved;};
+struct Trb{unsigned int parameterLo,parameterHi,status,control;};
+struct XhciCaps{unsigned char capLength;unsigned short version;unsigned int hcs1,hcs2,hcs3,hcc1,dboff,rtsoff;unsigned int maxSlots,maxPorts;bool valid;};
+struct Ring{DriverDmaInfo dma;unsigned int enqueue;bool cycle;bool ready;};
+static volatile unsigned int* reg32(unsigned long base,unsigned long off){return (volatile unsigned int*)(base+off);}
+static XhciCaps probe(unsigned long mmio,unsigned long length){XhciCaps c{};if(!mmio||length<0x20)return c;volatile unsigned char* b=(volatile unsigned char*)mmio;c.capLength=b[0];c.version=*(volatile unsigned short*)(mmio+2);c.hcs1=*reg32(mmio,4);c.hcs2=*reg32(mmio,8);c.hcs3=*reg32(mmio,12);c.hcc1=*reg32(mmio,16);c.dboff=*reg32(mmio,20);c.rtsoff=*reg32(mmio,24);c.maxSlots=c.hcs1&0xff;c.maxPorts=(c.hcs1>>24)&0xff;c.valid=c.capLength>=0x20&&c.capLength<0x100&&c.version>=0x0090&&c.version<=0x0200&&c.dboff<length&&c.rtsoff<length&&c.maxSlots;return c;}
+static bool allocDma(unsigned long bytes,unsigned long align,DriverDmaInfo&d){d={};return call(74,bytes,align,(unsigned long)&d)==0&&d.user&&d.physical&&d.bytes>=bytes;}
+static void zeroDma(DriverDmaInfo&d){volatile unsigned char*p=(volatile unsigned char*)d.user;for(unsigned long i=0;i<d.bytes;i++)p[i]=0;}
+static bool initCommandRing(Ring&r){if(!allocDma(4096,64,r.dma))return false;zeroDma(r.dma);Trb*t=(Trb*)r.dma.user;unsigned int last=(unsigned int)(r.dma.bytes/sizeof(Trb))-1;t[last].parameterLo=(unsigned int)r.dma.physical;t[last].parameterHi=(unsigned int)(r.dma.physical>>32);t[last].control=(6u<<10)|(1u<<1)|1u;r.enqueue=0;r.cycle=true;r.ready=true;return true;}
+static bool initEventRing(Ring&r,DriverDmaInfo&erst){if(!allocDma(4096,64,r.dma)||!allocDma(4096,64,erst))return false;zeroDma(r.dma);zeroDma(erst);volatile unsigned long*e=(volatile unsigned long*)erst.user;e[0]=r.dma.physical;e[1]=r.dma.bytes/sizeof(Trb);r.enqueue=0;r.cycle=true;r.ready=true;return true;}
+
+static bool waitBit(volatile unsigned int*r,unsigned int mask,bool set,unsigned long spins=4000000){while(spins--){bool v=((*r&mask)!=0);if(v==set)return true;asm volatile("pause");}return false;}
+static bool takeAndStart(unsigned long device,unsigned long mmio,const XhciCaps&c,Ring&cmd,Ring&evt,DriverDmaInfo&erst,DriverDmaInfo&dcbaa){
+ if(!c.valid||!cmd.ready||!evt.ready||!erst.user||!dcbaa.user)return false;
+ if(call(77,device)!=0)return false; // kernel compatibility owner stops touching xHCI
+ unsigned long op=mmio+c.capLength;volatile unsigned int*usbcmd=reg32(op,0),*usbsts=reg32(op,4);
+ *usbcmd&=~1u;if(!waitBit(usbsts,1u,true))return false; // halted
+ *usbcmd|=2u;if(!waitBit(usbcmd,2u,false))return false;if(!waitBit(usbsts,1u<<11,false))return false; // reset/CNR
+ *reg32(op,0x38)=c.maxSlots>255?255:c.maxSlots; // CONFIG.MaxSlotsEn
+ *(volatile unsigned long*)(op+0x30)=dcbaa.physical;
+ *(volatile unsigned long*)(op+0x18)=cmd.dma.physical|1ull;
+ unsigned long rt=mmio+(c.rtsoff&~0x1fu),intr=rt+0x20;
+ *reg32(intr,0x08)=1;*(volatile unsigned long*)(intr+0x10)=erst.physical;*(volatile unsigned long*)(intr+0x18)=evt.dma.physical|(1ull<<3);*reg32(intr,0)=2u;
+ *usbcmd|=(1u|4u);if(!waitBit(usbsts,1u,false))return false;
+ return true;
+}
+extern "C" __attribute__((section(".text.entry"))) void _davis_start(){
+ unsigned long device=(unsigned long)call(72);if(!device)for(;;)call(2);if(call(64,device)!=0)for(;;)call(2);
+ DriverResourceInfo r[12]{};unsigned long n=0;for(;n<12;n++){long q=call(73,n,(unsigned long)&r[n]);if(q<=0)break;}
+ unsigned long irqEp=(unsigned long)call(49,2),irqHandle=0,mmioHandle=0,mmio=0,mmioLen=0;
+ for(unsigned long i=0;i<n;i++)if(r[i].type==1&&!mmio){long h=call(65,r[i].id,2);if(h>0){long va=call(68,(unsigned long)h);if(va>0){mmioHandle=(unsigned long)h;mmio=(unsigned long)va;mmioLen=r[i].length;}else call(66,(unsigned long)h);}}
+ XhciCaps caps=probe(mmio,mmioLen);
+ for(unsigned long i=0;i<n;i++)if(r[i].type==5&&!irqHandle){long h=call(65,r[i].id,5);if(h>0&&call(76,(unsigned long)h)>0&&irqEp&&call(71,(unsigned long)h,irqEp)==0)irqHandle=(unsigned long)h;else if(h>0)call(66,(unsigned long)h);}
+ // Build the actual xHCI DMA structures in the Ring-3 driver's address space.
+ // Controller register ownership remains with the compatibility backend in v1.78,
+ // so these structures are deliberately not installed into CRCR/DCBAAP/ERSTBA yet.
+ Ring command{},event{};DriverDmaInfo erst{},dcbaa{};
+ bool ringsReady=caps.valid&&initCommandRing(command)&&initEventRing(event,erst)&&allocDma(4096,64,dcbaa);
+ if(ringsReady){zeroDma(dcbaa);volatile unsigned long*dc=(volatile unsigned long*)dcbaa.user;dc[0]=0;}
+ bool ownsController=ringsReady&&takeAndStart(device,mmio,caps,command,event,erst,dcbaa);
+ // Enumerate connected root ports non-destructively after Ring-3 owns the controller.
+ unsigned int connectedMask=0;if(ownsController){unsigned long op=mmio+caps.capLength;for(unsigned int port=0;port<caps.maxPorts&&port<32;port++){unsigned int ps=*reg32(op,0x400+port*0x10);if(ps&1u)connectedMask|=(1u<<port);}}
+ for(;;){call(67,device);call(2);}
+ (void)ringsReady;(void)ownsController;(void)connectedMask;(void)irqHandle;(void)mmioHandle;
+}

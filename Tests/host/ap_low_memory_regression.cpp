@@ -1,0 +1,4 @@
+#include "Kernel/ApLowMemory.hpp"
+#include <cstdio>
+using namespace Davis;
+int main(){u64 cycles=0;for(u32 n=0;n<100000;n++){ApTrampoline::Handoff h{};if(!ApTrampoline::Build(h,n%256,n%64,0x1000,0xffff800000020000ull,0xffff800000030000ull,0x12340000ull+n,n+1))return 1;ApLowMemory::Image i{};u64 p=0x1000ull+((n%255)*0x1000ull);if(!ApLowMemory::Build(i,p,h)||!ApLowMemory::Validate(i)||ApLowMemory::GetHandoff(i)->logicalId!=n%64)return 2;cycles++;}ApTrampoline::Handoff h{};ApTrampoline::Build(h,1,1,0x1000,0x4000,0x5000,6,7);ApLowMemory::Image i{};if(ApLowMemory::Build(i,0x1234,h))return 3;ApLowMemory::Build(i,0x8000,h);i.bytes[ApLowMemory::HandoffOffset+8]^=1;if(ApLowMemory::Validate(i))return 4;std::printf("PASS ap_low_memory cycles=%llu image_bytes=%u corrupt_reject=1\n",(unsigned long long)cycles,ApLowMemory::ImageBytes);}

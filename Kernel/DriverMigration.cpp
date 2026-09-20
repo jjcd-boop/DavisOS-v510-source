@@ -1,0 +1,2 @@
+#include "DriverMigration.hpp"
+namespace Davis::DriverMigration { State state{};void Init(){state={};for(u32 i=0;i<(u32)Driver::Count;i++){state.entries[i].driver=(Driver)i;state.entries[i].mode=Mode::KernelCompatibility;}state.ready=true;}void NotePrepared(Driver d,u64 p){auto&e=state.entries[(u32)d];e.mode=Mode::Ring3Prepared;e.processId=p;e.bootImagePresent=true;}void NoteActive(Driver d,u64 p){auto&e=state.entries[(u32)d];e.mode=Mode::Ring3Active;e.processId=p;e.bootImagePresent=true;} }

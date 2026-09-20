@@ -1,0 +1,2 @@
+Davis OS 5.00.00
+Rebuilt DAVISKRN.BIN — trap CR3 freeze repair is IN the binary, not a source overlay.

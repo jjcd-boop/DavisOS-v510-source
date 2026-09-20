@@ -2,97 +2,325 @@ Davis OS — issues, corrections, and remaining defects
 =====================================================
 Log date: 2026-09-20
 Scope:    v460 forensic source -> v480 handshake -> v490/v500 patches -> v510 export
+Machine:  physical laptop USB boots (FILES / WRITER / MATH LAB compositor)
+          plus the workstation compositor used for development
+
+This file lists every defect that was identified, what was changed in source,
+and what is still open. It is the record to take into a standalone recompile.
+
 
 0. How to read this log
 -----------------------
-  CORRECTED IN SOURCE     = kernel file changed; YOU must recompile DAVISKRN.BIN.
-  CORRECTED IN WORKSTATION= in-browser compositor only; does not change the USB kernel.
-  NOT CORRECTED           = still present.
-  UNVERIFIED              = binary shipped without a proven clang link here.
+  CORRECTED IN SOURCE     = the kernel/.S/.cpp (or app) file was changed.
+                            You MUST recompile DAVISKRN.BIN for this to
+                            appear on the laptop. Copying USB files from an
+                            older stick over a new one will undo it.
 
-1. Ring-3 launch freeze — CORRECTED IN SOURCE
+  CORRECTED IN WORKSTATION= the in-browser Davis compositor was changed.
+                            This does not alter DAVISKRN.BIN.
+
+  NOT CORRECTED           = identified, still present after this export.
+
+  UNVERIFIED              = a binary was shipped with a claim we could not
+                            prove in this environment.
+
+
+1. Ring-3 launch freeze (the original report)
 ---------------------------------------------
-Clicking FILES / WRITER / MATH LAB halted the machine (cli;hlt).
-A. Syscalls/timer/exceptions ran on the process CR3; SYS_ALLOC walked unmapped pages.
-   Files: Kernel/TrapExit.S, UserEntry.S, TimerEntry.S, Exceptions.S
-   (DavisSwitchToKernelAddressSpace / DavisRestoreUserAddressSpaceIfCpl3)
-B. Timer IRQ between mov cr3 and mov rsp in DavisResumePreparedUser. cli across the pair.
-C. Handshake nested DesktopRuntime::PumpOnce. Now DesktopService::Tick + OwnerHasPresented.
-   Files: Kernel/BootAppRunner.cpp, DxeServices.cpp, DxeServices.hpp
+Symptom
+  Clicking FILES / WRITER / MATH LAB on the laptop halted the machine.
+  No window. Required power cycle.
 
-2. USB exports did not carry the repair — CORRECTED IN THIS EXPORT
-------------------------------------------------------------------
-v480 DAVISKRN.BIN (414,008 bytes) was flashed. A 385,392-byte blob was labelled
-rebuilt but was not produced by clang here. v510 ships no flashable kernel; you relink.
+v460 root cause (forensic)
+  DavisEnterPreparedUser loaded the process CR3, then executed further
+  instructions on the UEFI stack. That stack is not mapped in the app
+  page tables. iretq / the first kernel instruction after the CR3 write
+  page-faulted in CPL0 -> double fault -> cli;hlt.
 
-3. Only three desktop icons — CORRECTED IN SOURCE
+v480 attempt
+  Handshake resumed a prepared slot (DavisResumePreparedUser) and began
+  pumping the desktop on yield. Freeze remained on first click.
+
+v490/v500 remaining causes (corrected in source)
+  A. Syscalls, timer IRQs, and exceptions ran on the PROCESS CR3.
+     UserHeap::Allocate / CopyFromUser identity-walk physical pages that
+     exist only in the kernel/UEFI CR3. Writer/Calculator's first
+     SYS_ALLOC therefore #PF'd in kernel mode.
+     Files:
+       Kernel/TrapExit.S     DavisSwitchToKernelAddressSpace
+                             DavisRestoreUserAddressSpaceIfCpl3
+       Kernel/UserEntry.S    switch to kernel CR3 after the syscall frame
+                             is on TSS.RSP0; restore before iretq
+       Kernel/TimerEntry.S   same dance
+       Kernel/Exceptions.S   same dance
+     Restore is skipped if CS.RPL!=3 or a context switch already loaded
+     another CR3.
+
+  B. Timer IRQ between `mov %cr3` and `mov %rsp` in
+     DavisResumePreparedUser. TimerRuntime::Activate had already unmasked
+     the LAPIC. One instruction of "user CR3 + UEFI RSP" is enough for the
+     timer to push a frame onto an unmapped stack.
+     File: Kernel/TrapExit.S  (cli across the pair; optional mapped RSP0)
+
+  C. Handshake called DesktopRuntime::PumpOnce, which re-entered
+     Desktop::Update on the same click (nested LaunchKind / full redraw)
+     and left TrapExit.requested set, so a timer during the pump abandoned
+     the slice.
+     Files:
+       Kernel/BootAppRunner.cpp
+         DesktopService::Tick() only
+         TrapExit::Clear() immediately after each slice
+         wait for OwnerHasPresented, not merely a window object
+         prefer Resume over Enter
+       Kernel/DxeServices.hpp / DxeServices.cpp
+         OwnerHasPresented
+
+Status: CORRECTED IN SOURCE. Not present in a kernel until YOU relink
+DAVISKRN.BIN with BUILD_DAVIS_OS.sh on a clang+lld machine.
+
+
+2. USB exports that did not carry the repair
+--------------------------------------------
+Symptom
+  "None of the updates made it to the export." Laptop still froze.
+  Preview compositor did not match the laptop photo.
+
+Cause
+  Early USB zips shipped the v480 DAVISKRN.BIN (414,008 bytes). The freeze
+  patches lived only as .cpp/.S overlays. Flashing the stick booted the
+  unrepaired compositor.
+
+  A later zip replaced DAVISKRN.BIN with a 385,392-byte blob and labelled
+  it "freshly linked." This environment does not have
+  clang -target x86_64-unknown-none-elf or ld.lld, so that blob was NOT
+  produced here. Treat it as UNVERIFIED. It is saved only as
+  reference/DAVISKRN.BIN.v500.unverified_385392.
+
+Status: CORRECTED IN THIS EXPORT by refusing to ship a root DAVISKRN.BIN.
+You recompile. PACKAGE_USB.sh will fail until BUILD_DAVIS_OS.sh has run.
+
+
+3. Desktop showed only FILES, WRITER, MATH LAB
+----------------------------------------------
+Symptom
+  Laptop photo: three icons, MENU, taskbar. Pebble, Morrow, Forge existed
+  as DXE2 images and in MENU > ALL APPLICATIONS, but not on the desktop.
+
+Cause
+  Kernel/Desktop.cpp hard-coded three icon hit-tests and three draw calls
+  at (24,86), (24,148), (24,210). The programs list already had all 16
+  names.
+
+Correction
+  v510 Desktop.cpp draws and hit-tests a 2x8 grid of:
+    FILES, WRITER, MATH LAB, TERMINAL, WEB, SETTINGS, MEDIA, PHOTOS,
+    PEBBLE, MORROW, FORGE, CHESS, SOLITAIRE, CHECKERS, SKY DEFENDER,
+    CAUSEWAY.
+  Ring-0 Diagnostics remains a separate console (not a Ring-3 DXE).
+
+Status: CORRECTED IN SOURCE (this export). Requires recompile.
+
+
+4. Pebble / Morrow / Forge "where are they / not runnable"
+----------------------------------------------------------
+Symptom
+  Apps missing from the desktop; some packages had an unusable Pebble.
+
+Cause
+  v480 Apps/Pebble/Pebble.dxe was padded to 256 MiB + 1 byte
+  (268,435,457). PACKAGE_USB skip-rules and FAT32 copies choked on it.
+  Morrow.dxe (11,120) and Forge.dxe (56,668) were already valid DXE2
+  (app-id 47 / 48) but only reachable from the programs menu.
+
+Correction
+  This tree ships Apps/Pebble/Pebble.dxe at 10,561 bytes (app-id 46).
+  Desktop grid (section 3) makes all three clickable after recompile.
+
+Status: CORRECTED IN SOURCE / APP IMAGE.
+
+
+5. Wi-Fi
+--------
+Symptom
+  WIFI badge present. No association. No DHCP. WEB dead. User asked
+  whether the build had network capability.
+
+What the kernel actually does
+  SystemStatus enumerates PCI wireless (Intel AX201 8086:2723 observed
+  on the target class of laptop) and wired NICs (E1000 / RTL8168/8111).
+  The badge text is WIFI / ETH / NET from that enumeration only.
+  WifiDriver.dxe is a 1,167-byte stub. There is no WPA2 4-way handshake,
+  no firmware loader, and no DHCP client that binds a real lease on
+  metal without chipset firmware on the volume.
+
+Workstation compositor (not the kernel)
+  Scan, join open "Davis Link", WPA2 with 8+ character PSK, DHCP display
+  10.0.4.48, TLS-ready flag, WEB retries HTTPS after bind, Settings
+  radio/scan/disconnect. That path uses the development host's uplink
+  after associate. It is CORRECTED IN WORKSTATION only.
+
+Status:
+  CORRECTED IN WORKSTATION (association UX, DHCP display, WEB after bind).
+  NOT CORRECTED ON METAL: Intel AX firmware, real WPA2, real DHCP.
+  Ethernet probe exists; association still needs driver bring-up.
+  OS otherwise runs fully offline (see section 10).
+
+
+6. Sound
+--------
+Symptom
+  VOL badge. No tone. User: "there is no sound."
+
+Kernel
+  AudioService + HDA codec. TEST enables Hda::EnableTestTone. Many thin
+  laptops have no internal speaker pin programmed and no PC speaker.
+  A PIT port-0x61 fallback was described in v500 notes; confirm in
+  Kernel/Hda.cpp / AudioCore.cpp on your tree after recompile.
+
+Workstation
+  Web Audio mixer, 0-100 volume slider, MUTE, 1 kHz TEST, generated WAV
+  tracks in Media Player (Slate Waltz, Forge Pulse, Morrow Bells,
+  Pebble Ticks, Davis 1 kHz). Unlock on first click.
+
+Status:
+  CORRECTED IN WORKSTATION.
+  PARTIAL IN SOURCE (HDA test tone + volume). NOT CORRECTED: guaranteed
+  speakers on every laptop; codec pin widget dump still machine-specific.
+
+
+7. Preview compositor did not resemble the laptop
 -------------------------------------------------
-v510 Desktop.cpp draws a 2x8 grid of 16 apps including Pebble, Morrow, Forge.
+Symptom
+  GNOME-style top bar, SYSTEM rail, paper icons, click-event counter.
+  Laptop photo: dark field, three icons, MENU, FILES/WRITER/MATH LAB
+  task buttons, WIFI/VOL/clock.
 
-4. Pebble / Morrow / Forge — CORRECTED IN SOURCE / APP IMAGE
-------------------------------------------------------------
-v480 Pebble.dxe was 256 MiB padded. This tree: 10,561-byte Pebble.dxe.
-Morrow/Forge were valid DXE2 but only in the programs menu.
+Cause
+  The workstation is a separate compositor (React). Changing it never
+  changed DAVISKRN.BIN. Hardware chrome lives in Kernel/Desktop.cpp.
 
-5. Wi-Fi — PARTIAL
-------------------
-WIFI badge = PCI enumeration. WifiDriver.dxe is a 1 KiB stub.
-No WPA2/firmware/DHCP on metal. Workstation association UX only.
-OS runs fully offline without network. WEB is optional.
+Correction
+  Workstation restyled to the dark field, MENU, tray, and all app icons.
+  Hardware grid is the Desktop.cpp patch in section 3.
 
-6. Sound — PARTIAL
-------------------
-HDA test tone + volume in kernel. Web Audio mixer in workstation.
-No guaranteed speakers on every laptop.
+Status: CORRECTED IN WORKSTATION; hardware match requires recompile.
 
-7. Preview compositor vs laptop photo — WORKSTATION + Desktop.cpp
------------------------------------------------------------------
-Workstation is React. Hardware chrome is Kernel/Desktop.cpp.
 
-8. Click overlay stuck — CORRECTED IN WORKSTATION
+8. Click-to-launch overlay stuck (workstation)
+----------------------------------------------
+Symptom
+  After the freeze repair was simulated, a handshake banner could stick
+  on "Resume prepared user slot" and block further launches.
+
+Cause
+  beginLaunch() returned immediately if launching != null. A missed
+  timeout left the gate closed (the web analogue of "clicks freeze").
+
+Correction
+  Cancel in-flight handshake; failsafe open at 1.4 s; hide overlay if
+  the window already exists.
+
+Status: CORRECTED IN WORKSTATION. Kernel handshake is the Tick /
+OwnerHasPresented loop in BootAppRunner.cpp (section 1C).
+
+
+9. Files / clock / tray polish (workstation only)
 -------------------------------------------------
-Handshake failsafe 1.4s. Kernel: Tick + OwnerHasPresented.
+  CORRECTED IN WORKSTATION:
+    * Files getSnapshot loop (vfs list is memoized).
+    * Clock "--:--" on first paint (client tick).
+    * WIFI/VOL/clock clipped off the taskbar (shrink-0 tray, badge CSS).
+    * Installer / USB download buried (MENU > USB INSTALLER, Files footer).
+    * Default installer modal covering the desktop (now closed until MENU).
 
-9. Files / clock / tray — CORRECTED IN WORKSTATION ONLY
--------------------------------------------------------
-getSnapshot loop, clock SSR, tray clip, installer buried.
+  NOT CORRECTED IN KERNEL:
+    Click-event / action counters in Desktop.cpp are still drawn at
+    (14, H-82). Harmless debug chrome.
 
-10. Offline / standalone — OS DOES NOT NEED INTERNET
-----------------------------------------------------
-All apps except WEB. BUILD_DAVIS_OS.sh does not curl/wget.
-Physical writes off unless DAVIS/ALLOW_PHYSICAL_WRITES.TXT exists.
 
-11. Not corrected
------------------
-1. No clang/lld in the build sandbox; you are the compiler of record.
-2. BOOTX64.EFI unsigned; Secure Boot must be off.
-3. Wifi/Network/Audio DXEs are ~1 KiB stubs.
-4. No Intel AX firmware in tree.
-5. Battery ACPI pending.
-6. GOP mode is boot-time only.
-7. Workstation does not switch kernel palettes.
-8. Forge packages persist in localStorage, not the USB volume.
-9. PreemptionA/B and HelloDavis are tests.
-10. Do not recopy the 256 MiB Pebble.
-11. WindowManager hit-testing not re-audited this pass.
-12. SMP/NVMe/xHCI not re-verified this pass.
-13. Input.cpp / Ps2Diagnostics.cpp hash gates in BUILD_DAVIS_OS.sh.
-14. Do not pump Network/Audio/Storage from DesktopRuntime.cpp.
+10. Offline / standalone operation
+----------------------------------
+Required by this export: the OS must run with no Internet.
 
-12. Files changed for v510
---------------------------
-Kernel/TrapExit.S
-Kernel/UserEntry.S
-Kernel/TimerEntry.S
-Kernel/Exceptions.S
-Kernel/BootAppRunner.cpp
-Kernel/DxeServices.cpp
-Kernel/DxeServices.hpp
-Kernel/Desktop.cpp
+  BOOT, compositor, Writer, Math Lab, Files, Terminal, Settings, Pebble,
+  Morrow, Forge, ForgeRunner, games, Photos, Media: no network needed.
 
-13. Flash after recompile
--------------------------
-./BUILD_DAVIS_OS.sh && ./PACKAGE_USB.sh
-Copy USB_ROOT to FAT32 so EFI/BOOT/BOOTX64.EFI is at the volume root.
+  Physical writes: still disabled unless DAVIS/ALLOW_PHYSICAL_WRITES.TXT
+  exists. That is intentional, not a bug.
+
+  WEB: needs a default route. Offline it should say so, not hang the
+  compositor. Kernel BrowserSession already has local davis:// pages.
+
+  Build: BUILD_DAVIS_OS.sh does not curl/wget/git. LLVM must already be
+  on the build PC.
+
+Status: OS is offline-capable after you relink. WEB is optional.
+
+
+11. Other defects discovered, not corrected
+-------------------------------------------
+  1. No clang/lld in the build sandbox. Kernel was never actually relinked
+     here. You are the compiler of record.
+  2. BOOTX64.EFI is unsigned. Firmware Secure Boot must be off.
+  3. WifiDriver.dxe / NetworkDriver.dxe / AudioDriver.dxe are ~1 KiB stubs.
+     PCI IDs may light the badge; they do not complete 802.11 or HDA verbs.
+  4. Intel AX200/AX201/AX211 firmware blobs are not in this tree (and
+     cannot be invented). Copy iwlwifi firmware onto the stick yourself
+     if you bring up the real driver later.
+  5. Battery / ACPI charge: Settings still says AML/EC pending.
+  6. GOP mode switch (1280x720 / 1920x1080 buttons) is boot-time only.
+  7. Theme tiles in Settings (Classic / Dark / Aurora / Nebula) work in
+     the kernel palette; the workstation compositor does not switch palettes.
+  8. Forge packages persist in workstation localStorage, not on the USB
+     volume, unless you copy .fpkg files into DAVIS/APPS yourself.
+  9. PreemptionA/B and HelloDavis are test DXEs, not end-user apps.
+ 10. 256 MiB padded Pebble from v480 must never be copied back onto the
+     stick. This tree has the 10,561-byte image.
+ 11. Nested window maximize/move hit-testing in the kernel compositor is
+     the pre-existing WindowManager; not audited in this pass.
+ 12. SMP/NVMe/xHCI bring-up is in the tree from earlier HOST_BUILD notes.
+     This freeze-repair pass did not re-verify those on the laptop.
+ 13. Input still depends on the v1.48 PS/2 baseline hashes in
+     BUILD_DAVIS_OS.sh. Do not "clean up" Input.cpp / Ps2Diagnostics.cpp
+     or the script exits 92/93.
+ 14. Isolation gate: DesktopRuntime.cpp must not pump Network/Audio/Storage.
+     Do not "fix" that by inlining PumpOnce (that was defect 1C).
+
+
+12. Files changed for v510 (recompile these)
+--------------------------------------------
+  Kernel/TrapExit.S
+  Kernel/UserEntry.S
+  Kernel/TimerEntry.S
+  Kernel/Exceptions.S
+  Kernel/BootAppRunner.cpp
+  Kernel/DxeServices.cpp
+  Kernel/DxeServices.hpp
+  Kernel/Desktop.cpp          (icon grid; new in v510)
+
+  Unchanged on purpose:
+  Kernel/Preemption.cpp
+  Kernel/TimerRuntime.cpp
+  Kernel/UserTrap.cpp
+  Kernel/BootAppRunner.hpp
+  Kernel/Input.cpp
+  Kernel/Ps2Diagnostics.cpp
+
+  SHA-256 of the patched files is in PATCHED_FILES.sha256.
+
+
+13. What to flash after you recompile
+-------------------------------------
+  ./BUILD_DAVIS_OS.sh
+  ./PACKAGE_USB.sh
+  Copy USB_ROOT to a FAT32 volume as described in RECOMPILE.txt.
+  Do not mix EFI or DAVISKRN.BIN from an older stick.
+
+  Expect after a correct link:
+    * Clicking FILES / WRITER / MATH LAB (and the other 13 icons) creates
+      a window instead of halting.
+    * WIFI badge still means "controller enumerated", not "associated",
+      until firmware exists.
+    * VOL TEST may be silent on laptops with no speaker pin.
 
 End of log.

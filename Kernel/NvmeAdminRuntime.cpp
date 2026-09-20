@@ -1,0 +1,6 @@
+#include "NvmeAdminRuntime.hpp"
+namespace Davis::NvmeAdminRuntime {
+bool Validate(const Transport&t){return t.submit&&t.poll&&t.ring&&t.reset;}
+static bool wait(const Transport&t,u16 cid,u32 limit,State&s){for(u32 i=0;i<limit;i++){u16 status=0xffff;s.polls++;if(t.poll(t.context,cid,status))return (status>>1)==0;}return false;}
+bool CreateIoQueues(const Transport&t,const Nvme::QueueCreatePlan&p,u16 cqCid,u16 sqCid,u32 limit,State&s){s={};if(!Validate(t)||!p.valid||!cqCid||!sqCid||cqCid==sqCid||limit<100||limit>50000000){s.stage=Stage::Failed;return false;}Nvme::IoCommand cq=p.createCq,sq=p.createSq;cq.cid=cqCid;sq.cid=sqCid;s.cqCid=cqCid;s.sqCid=sqCid;if(!t.submit(t.context,cq)){s.stage=Stage::Failed;return false;}s.stage=Stage::CqSubmitted;t.ring(t.context,true,0);if(!wait(t,cqCid,limit,s)){s.stage=Stage::TimedOut;t.reset(t.context);s.resets++;return false;}t.ring(t.context,false,0);s.stage=Stage::CqReady;if(!t.submit(t.context,sq)){s.stage=Stage::Failed;t.reset(t.context);s.resets++;return false;}s.stage=Stage::SqSubmitted;t.ring(t.context,true,0);if(!wait(t,sqCid,limit,s)){s.stage=Stage::TimedOut;t.reset(t.context);s.resets++;return false;}t.ring(t.context,false,0);s.stage=Stage::Ready;s.ready=true;return true;}
+}

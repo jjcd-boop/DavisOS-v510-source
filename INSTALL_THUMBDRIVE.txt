@@ -1,0 +1,44 @@
+Davis OS 5.00.00 — thumb-drive install
+=====================================
+
+This stick is a UEFI removable installer. Physical disk writes stay disabled
+unless you add DAVIS\ALLOW_PHYSICAL_WRITES.TXT yourself.
+
+A. Copy onto a FAT32 USB (recommended)
+   1. Format the stick FAT32 (GPT or MBR). 1 GB is enough.
+   2. Copy EVERYTHING in this USB folder to the stick so that:
+        EFI\BOOT\BOOTX64.EFI
+        DAVIS\DAVISKRN.BIN
+        DAVIS\APPS\Writer.dxe   (and the other .dxe files)
+      sit at the root of the volume — not inside another folder.
+   3. Windows: run COPY_TO_USB.cmd E:
+      Linux:   sudo ./copy_to_usb.sh /dev/sdX1   (the FAT partition)
+   4. Firmware: Boot from USB. Disable Secure Boot if the EFI is unsigned.
+
+B. Write the disk image
+   DavisOS_v490.00_THUMB.img is a GPT disk with an EFI System partition.
+   Linux:  sudo dd if=DavisOS_v490.00_THUMB.img of=/dev/sdX bs=4M conv=fsync
+   macOS:  sudo dd if=DavisOS_v490.00_THUMB.img of=/dev/rdiskN bs=4m
+   Windows: Rufus → DD image, or Etcher.
+
+What boots
+   BOOTX64.EFI loads DAVIS\DAVISKRN.BIN at 32 MiB and stages every DXE2
+   under DAVIS\APPS (Pebble, Morrow, Forge, Writer, Media, …).
+
+v500 freeze repair
+   DAVISKRN.BIN in this package is a freshly linked kernel. The trap-CR3
+   switch, first-click handshake, HDA speaker-pin fallback, and PC-speaker
+   test tone are in the binary. Copy the USB folder onto a FAT32 stick and
+   boot. You do not need to rebuild on another machine for the freeze fix.
+
+   WIFI: the badge enumerates the PCI wireless controller. Association /
+   WPA2 still need chipset firmware (Intel AX200/AX201/AX211). Ethernet
+   uses Intel E1000 or Realtek RTL8168/8111 when those NICs are present.
+
+   SOUND: click VOL then TEST. If HDA finds an internal speaker pin, you
+   get a 500 Hz tone through the codec. If not, the PIT PC-speaker gate
+   (port 0x61) is used. Many thin laptops have no PC speaker.
+
+Pebble.dxe
+   The 256 MiB padded Pebble.dxe from v480 is discarded. This package ships
+   a 10 KiB DXE2 rebuilt from Pebble.elf (app-id 46, window+ipc+file).

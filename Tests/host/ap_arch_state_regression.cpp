@@ -1,0 +1,4 @@
+#include "Kernel/ApArchState.hpp"
+#include <cstdio>
+using namespace Davis;
+int main(){u64 transitions=0;for(u32 n=0;n<100000;n++){ApArchState::State s{};if(!ApArchState::Prepare(s,n%256,n%64,0x1000,0x2000,0x3000,0xffff800000010000ull,0xffff800000020000ull,0xffff800000030000ull))return 1;if(!ApArchState::EnterRealMode(s)||!ApArchState::EnterProtectedMode(s)||!ApArchState::PreparePaging(s)||!ApArchState::EnterLongMode(s)||!ApArchState::InstallPerCpu(s)||!ApArchState::MarkOnline(s)||s.stage!=ApArchState::Stage::Online)return 2;transitions+=s.transitions;}ApArchState::State bad{};if(ApArchState::Prepare(bad,1,1,0x1234,0x2000,0x3000,0x4000,0x5000,0x6000))return 3;ApArchState::State order{};if(!ApArchState::Prepare(order,1,1,0x1000,0x2000,0x3000,0x4000,0x5000,0x6000)||ApArchState::EnterLongMode(order)||!ApArchState::Fail(order))return 4;std::printf("PASS ap_arch_state cycles=100000 transitions=%llu\n",(unsigned long long)transitions);}

@@ -1,0 +1,4 @@
+#include "../Kernel/Scheduler.hpp"
+#include "../Kernel/KernelClock.hpp"
+#include <cstdio>
+int main(){Davis::Process::Table t{};Davis::Process::Init(t);t.process[0].id=1;t.process[0].state=Davis::Process::State::Ready;t.process[1].id=2;t.process[1].state=Davis::Process::State::Ready;Davis::Scheduler::State s{};Davis::Scheduler::Init(s,t,{2});auto*a=Davis::Scheduler::OnTick(s);if(!a||a->id!=1)return 1;if(Davis::Scheduler::OnTick(s)->id!=1)return 2;if(Davis::Scheduler::OnTick(s)->id!=2)return 3;Davis::Scheduler::BlockCurrent(s);if(t.process[1].state!=Davis::Process::State::Blocked)return 4;Davis::Scheduler::OnTick(s);if(Davis::Scheduler::Current(s)->id!=1)return 5;Davis::Scheduler::Wake(t.process[1]);if(t.process[1].state!=Davis::Process::State::Ready)return 6;Davis::KernelClock::State c{};Davis::KernelClock::Init(c,1000);for(int i=0;i<25;i++)Davis::KernelClock::Tick(c);if(Davis::KernelClock::Milliseconds(c)!=25)return 7;std::puts("PASS v0.66 scheduler/clock model");}

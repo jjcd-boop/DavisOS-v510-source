@@ -1,0 +1,4 @@
+#include "Kernel/ApTrampoline.hpp"
+#include <cstdio>
+using namespace Davis;
+int main(){u64 cycles=0;for(u32 i=0;i<100000;i++){ApTrampoline::Handoff h{};u64 cr3=0x1000ull+((u64)(i%0xffffe)*0x1000ull);if(cr3>0xfffff000ull)cr3=0xfffff000ull;if(!ApTrampoline::Build(h,i%256,i%64,cr3,0x200000,0xffffffff80001000ull,0x12340000ull+i,i+1))return 1;if(!ApTrampoline::ValidatePrePaging(h))return 2;auto x=h;x.magic^=1;if(ApTrampoline::ValidatePrePaging(x))return 3;x=h;x.version++;if(ApTrampoline::ValidatePrePaging(x))return 4;x=h;x.bytes--;if(ApTrampoline::ValidatePrePaging(x))return 5;x=h;x.cr3|=1;if(ApTrampoline::ValidatePrePaging(x))return 6;x=h;x.cr3=0x100000000ull;if(ApTrampoline::ValidatePrePaging(x))return 7;cycles++;}std::printf("PASS ap_trampoline_prepaging cycles=%llu magic=1 abi=1 cr3_32bit=1 alignment=1\n",(unsigned long long)cycles);}
