@@ -1,0 +1,98 @@
+Davis OS — issues, corrections, and remaining defects
+=====================================================
+Log date: 2026-09-20
+Scope:    v460 forensic source -> v480 handshake -> v490/v500 patches -> v510 export
+
+0. How to read this log
+-----------------------
+  CORRECTED IN SOURCE     = kernel file changed; YOU must recompile DAVISKRN.BIN.
+  CORRECTED IN WORKSTATION= in-browser compositor only; does not change the USB kernel.
+  NOT CORRECTED           = still present.
+  UNVERIFIED              = binary shipped without a proven clang link here.
+
+1. Ring-3 launch freeze — CORRECTED IN SOURCE
+---------------------------------------------
+Clicking FILES / WRITER / MATH LAB halted the machine (cli;hlt).
+A. Syscalls/timer/exceptions ran on the process CR3; SYS_ALLOC walked unmapped pages.
+   Files: Kernel/TrapExit.S, UserEntry.S, TimerEntry.S, Exceptions.S
+   (DavisSwitchToKernelAddressSpace / DavisRestoreUserAddressSpaceIfCpl3)
+B. Timer IRQ between mov cr3 and mov rsp in DavisResumePreparedUser. cli across the pair.
+C. Handshake nested DesktopRuntime::PumpOnce. Now DesktopService::Tick + OwnerHasPresented.
+   Files: Kernel/BootAppRunner.cpp, DxeServices.cpp, DxeServices.hpp
+
+2. USB exports did not carry the repair — CORRECTED IN THIS EXPORT
+------------------------------------------------------------------
+v480 DAVISKRN.BIN (414,008 bytes) was flashed. A 385,392-byte blob was labelled
+rebuilt but was not produced by clang here. v510 ships no flashable kernel; you relink.
+
+3. Only three desktop icons — CORRECTED IN SOURCE
+-------------------------------------------------
+v510 Desktop.cpp draws a 2x8 grid of 16 apps including Pebble, Morrow, Forge.
+
+4. Pebble / Morrow / Forge — CORRECTED IN SOURCE / APP IMAGE
+------------------------------------------------------------
+v480 Pebble.dxe was 256 MiB padded. This tree: 10,561-byte Pebble.dxe.
+Morrow/Forge were valid DXE2 but only in the programs menu.
+
+5. Wi-Fi — PARTIAL
+------------------
+WIFI badge = PCI enumeration. WifiDriver.dxe is a 1 KiB stub.
+No WPA2/firmware/DHCP on metal. Workstation association UX only.
+OS runs fully offline without network. WEB is optional.
+
+6. Sound — PARTIAL
+------------------
+HDA test tone + volume in kernel. Web Audio mixer in workstation.
+No guaranteed speakers on every laptop.
+
+7. Preview compositor vs laptop photo — WORKSTATION + Desktop.cpp
+-----------------------------------------------------------------
+Workstation is React. Hardware chrome is Kernel/Desktop.cpp.
+
+8. Click overlay stuck — CORRECTED IN WORKSTATION
+-------------------------------------------------
+Handshake failsafe 1.4s. Kernel: Tick + OwnerHasPresented.
+
+9. Files / clock / tray — CORRECTED IN WORKSTATION ONLY
+-------------------------------------------------------
+getSnapshot loop, clock SSR, tray clip, installer buried.
+
+10. Offline / standalone — OS DOES NOT NEED INTERNET
+----------------------------------------------------
+All apps except WEB. BUILD_DAVIS_OS.sh does not curl/wget.
+Physical writes off unless DAVIS/ALLOW_PHYSICAL_WRITES.TXT exists.
+
+11. Not corrected
+-----------------
+1. No clang/lld in the build sandbox; you are the compiler of record.
+2. BOOTX64.EFI unsigned; Secure Boot must be off.
+3. Wifi/Network/Audio DXEs are ~1 KiB stubs.
+4. No Intel AX firmware in tree.
+5. Battery ACPI pending.
+6. GOP mode is boot-time only.
+7. Workstation does not switch kernel palettes.
+8. Forge packages persist in localStorage, not the USB volume.
+9. PreemptionA/B and HelloDavis are tests.
+10. Do not recopy the 256 MiB Pebble.
+11. WindowManager hit-testing not re-audited this pass.
+12. SMP/NVMe/xHCI not re-verified this pass.
+13. Input.cpp / Ps2Diagnostics.cpp hash gates in BUILD_DAVIS_OS.sh.
+14. Do not pump Network/Audio/Storage from DesktopRuntime.cpp.
+
+12. Files changed for v510
+--------------------------
+Kernel/TrapExit.S
+Kernel/UserEntry.S
+Kernel/TimerEntry.S
+Kernel/Exceptions.S
+Kernel/BootAppRunner.cpp
+Kernel/DxeServices.cpp
+Kernel/DxeServices.hpp
+Kernel/Desktop.cpp
+
+13. Flash after recompile
+-------------------------
+./BUILD_DAVIS_OS.sh && ./PACKAGE_USB.sh
+Copy USB_ROOT to FAT32 so EFI/BOOT/BOOTX64.EFI is at the volume root.
+
+End of log.

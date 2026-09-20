@@ -1,0 +1,41 @@
+Davis OS v510.00 — offline recompile
+=====================================
+
+This tree is self-contained. It does not download anything.
+You need a local LLVM toolchain already installed on the build machine
+(clang++, clang, ld.lld, llvm-objcopy). No network is required after that.
+
+Linux / macOS
+-------------
+  1. Confirm tools:
+       clang++ --version
+       ld.lld --version
+       llvm-objcopy --version
+  2. From this directory:
+       chmod +x BUILD_DAVIS_OS.sh PACKAGE_USB.sh
+       ./BUILD_DAVIS_OS.sh
+     That produces DAVISKRN.BIN and BOOTX64.EFI in this folder.
+  3. Stage a USB tree (still offline):
+       ./PACKAGE_USB.sh
+     Then copy USB_ROOT/* onto a FAT32 stick so that:
+       EFI/BOOT/BOOTX64.EFI
+       DAVIS/DAVISKRN.BIN
+       DAVIS/APPS/*.dxe
+     sit at the volume root. Disable Secure Boot. Boot from USB.
+
+Windows
+-------
+  Use BUILD_STANDALONE.cmd with the same LLVM tools on PATH.
+
+What this build changes versus v480
+-----------------------------------
+  * Trap CR3 switch on syscall, timer, and exception entry
+    (DavisSwitchToKernelAddressSpace). First-click SYS_ALLOC no longer
+    walks unmapped physical pages on the process CR3.
+  * cli across mov %cr3 / mov %rsp in DavisResumePreparedUser.
+  * First-click handshake uses DesktopService::Tick + OwnerHasPresented,
+    not a nested DesktopRuntime::PumpOnce.
+  * Desktop compositor draws all 16 applications as icons (two columns).
+  * Pebble.dxe is the 10 KiB DXE2 image, not the 256 MiB pad.
+
+This tree does not ship a flashable DAVISKRN.BIN. You relink it.
